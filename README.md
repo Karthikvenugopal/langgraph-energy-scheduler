@@ -1,3 +1,13 @@
+---
+title: EnergyScheduler
+emoji: ⚡
+colorFrom: yellow
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # ⚡ EnergyScheduler
 
 An AI agent that **restructures your Google Calendar around your energy levels**.
