@@ -140,6 +140,14 @@ def _connection_html() -> str:
             f"<div style='padding:8px 0;'>✅ Connected to <b>{name}</b> "
             "— using your real calendar and Google Fit data.</div>"
         )
+    if not google_auth.has_client_secrets():
+        # No OAuth client on disk (e.g. the hosted public demo). Show an intentional
+        # demo banner rather than a "Connect Google" button that can't complete.
+        return (
+            "<div style='padding:8px 0;'>🔬 <b>Live demo</b> — running on a realistic sample "
+            "calendar with synthetic energy and a live LLM. Clone the repo and add your Google "
+            "credentials to plan your <i>own</i> calendar &amp; Fit data.</div>"
+        )
     auth_url = f"{BACKEND_URL}/auth/google" if BACKEND_URL else "/auth/google"
     return (
         "<div style='padding:8px 0;'>"
