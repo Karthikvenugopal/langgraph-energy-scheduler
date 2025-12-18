@@ -10,15 +10,18 @@ pinned: false
 
 # ⚡ EnergyScheduler
 
-An AI agent that **restructures your Google Calendar around your energy levels**.
+EnergyScheduler is an AI agent that turns your calendar into an **energy-aware plan**. It reads
+your schedule and your wearable signals — sleep, activity, recovery — then decides *what to do
+when*: deep work in your peak hours, low-effort tasks in your dips, with a plain-English reason
+for every move.
 
-EnergyScheduler reads your **Google Fit** activity, sleep, and heart-rate data to estimate an
-hourly energy profile for the day, then runs a **LangGraph** agent (powered by **Groq**) that
-moves deep-work blocks into your peak hours and pushes low-effort tasks into your dips. No
-wearable connected? It falls back to a realistic **synthetic energy curve**, so the whole thing
-works immediately with zero setup.
+**▶️ Live demo:** https://karthikvenugopal-langgraph-energy-scheduler.hf.space/ui — loads instantly
+on a sample day + a live LLM (see [Live demo](#live-demo) for why it runs in demo mode).
 
-Everything in the stack is **free to run and deploy**.
+Under the hood it reads **Google Fit** activity, sleep, and heart-rate data to build an hourly
+energy profile, then runs a **LangGraph** agent (powered by **Groq**) to restructure the schedule.
+No wearable connected? It falls back to a realistic **synthetic energy curve**, so it works
+immediately with zero setup. Everything in the stack is **free to run and deploy**.
 
 ---
 
@@ -88,6 +91,43 @@ Everything in the stack is **free to run and deploy**.
 5. **format_output** — emits clean JSON plus human-readable reasoning bullets.
 
 Every node logs a `[node] …` line to stdout so you can follow the reasoning chain.
+
+---
+
+## Agent design: memory & context
+
+A "decision layer" for someone's day has to be **predictable and auditable**, so the agent is an
+explicit `StateGraph` — not a free-form tool-calling loop:
+
+- **LLM for judgement, code for control flow.** The pipeline (`fetch → classify → analyze →
+  restructure → format`) is fixed; the LLM only makes the calls that genuinely need judgement
+  (event classification, the restructure rationale). Every node is typed, logged, and has a
+  deterministic fallback, so the product degrades gracefully instead of hard-failing when the model
+  is slow, rate-limited, or wrong.
+- **Context stays flat.** State flows node-to-node as a compact `TypedDict`, not an ever-growing
+  chat transcript. The restructure prompt sends a *summarized* energy profile plus the classified
+  events, so token cost is bounded by the size of the **day**, not the length of the conversation —
+  the right default before reaching for compaction or a vector store.
+- **Where it grows next.** Per-user history (which suggestions you accept or reject) is a natural
+  fit for a small retrieval layer feeding the restructure step. The seam is already isolated in
+  [`agent/nodes.py`](agent/nodes.py) → `restructure_node`, so adding memory doesn't touch the rest
+  of the graph.
+
+---
+
+## Live demo
+
+**https://karthikvenugopal-langgraph-energy-scheduler.hf.space/ui**
+
+The hosted demo runs in **demo mode by design**: a realistic sample workday and the synthetic
+energy curve, with the **real Groq LLM** doing the classification and restructuring. That's
+deliberate — it loads in seconds and needs no login, so you can watch the agent actually work
+without granting a stranger's app access to your calendar.
+
+To plan **your own** Google Calendar + Fit data, clone the repo and run it locally (see
+*Connect Google Calendar + Google Fit* below). OAuth needs a registered redirect URI and a
+persistent token store, which a stateless public Space doesn't provide — so the deployed Space
+stays in demo mode on purpose.
 
 ---
 
