@@ -14,14 +14,19 @@ from typing import Any, Optional
 
 from services.google_auth import get_google_service, has_token
 
+# A realistic student-athlete day. Movable blocks (study, workouts, admin) start in
+# deliberately sub-optimal slots so the agent visibly improves them; classes and the
+# on-campus work shift are fixed anchors.
 # Each demo event is (title, start hour, start minute, duration minutes, description).
 _DEMO_EVENTS: list[tuple[str, int, int, int, str]] = [
-    ("Daily Standup", 9, 0, 30, "Team sync — status updates with the squad."),
-    ("Deep Work: Pricing model", 10, 0, 90, "Heads-down work on the pricing engine."),
-    ("Lunch", 12, 0, 60, "Lunch break."),
-    ("Design Review", 14, 0, 60, "Review new dashboard designs with design + PM."),
-    ("Focus Block: Bug triage", 16, 0, 90, "Solo focus block to clear the bug backlog."),
-    ("1:1 with Manager", 17, 0, 30, "Weekly 1:1."),
+    ("Email + Errands", 9, 0, 30, "Clear inbox and handle errands."),
+    ("CSCI 270 Lecture", 10, 0, 80, "Algorithms lecture."),
+    ("Easy Run", 12, 0, 40, "Recovery jog around campus."),
+    ("Research Assistant Shift", 13, 0, 120, "RA hours in the systems lab."),
+    ("EE 364 Discussion", 15, 30, 50, "Convex optimization discussion section."),
+    ("ML Readings", 17, 0, 60, "Read ML papers and take notes."),
+    ("Problem Set: Algorithms", 19, 0, 90, "CSCI 270 problem set."),
+    ("Strength Training", 21, 0, 60, "Lower-body lift at the rec center."),
 ]
 
 

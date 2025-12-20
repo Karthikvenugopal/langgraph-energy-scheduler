@@ -27,12 +27,12 @@ from services import calendar as calendar_service
 from services import energy as energy_service
 from services import fitness as fitness_service
 
-# Event types the agent never relocates: MEETINGs involve other people, while
-# BREAK and PERSONAL blocks (lunch, appointments) are time-sensitive by nature.
-_FIXED_TYPES = {"MEETING", "BREAK", "PERSONAL"}
-# Freely movable solo work, ordered so DEEP_WORK claims peak-energy windows first
-# and ADMIN settles into the leftover dips.
-_MOVE_PRIORITY = ["DEEP_WORK", "ADMIN"]
+# Event types the agent never relocates: CLASS and CAMPUS_WORK are fixed
+# commitments tied to set times (and other people).
+_FIXED_TYPES = {"CLASS", "CAMPUS_WORK"}
+# Movable blocks, ordered so focused study claims the peak first, then workouts
+# settle into the best remaining recovery windows, and ADMIN into the dips.
+_MOVE_PRIORITY = ["STUDY", "STRENGTH", "RUNNING", "ADMIN"]
 
 
 def _log(node: str, message: str) -> None:
@@ -180,10 +180,10 @@ def _rule_based_restructure(
     result: list[dict[str, Any]] = []
 
     for event in fixed:
-        if event["event_type"] == "MEETING":
-            reason = "Kept in place — involves other people."
-        else:
-            reason = "Kept in place — time-sensitive block."
+        if event["event_type"] == "CLASS":
+            reason = "Kept in place — fixed class time."
+        else:  # CAMPUS_WORK
+            reason = "Kept in place — scheduled on-campus work."
         result.append(
             {**event, "original_start": event["start"], "moved": False, "reason": reason}
         )
@@ -200,12 +200,17 @@ def _rule_based_restructure(
         new_end = new_start + timedelta(minutes=duration)
         moved = _fmt_time(new_start_iso) != _fmt_time(event["start"])
 
+        etype = event["event_type"]
+        when = new_start.strftime("%H:%M")
         if moved:
-            reason = (
-                f"Moved to {new_start.strftime('%H:%M')} to match a "
-                f"{'high' if event['event_type'] == 'DEEP_WORK' else 'low'}-energy "
-                f"window better suited to {event['event_type'].replace('_', ' ').lower()}."
-            )
+            if etype in ("STRENGTH", "RUNNING"):
+                reason = f"Moved to {when} to train when your energy and recovery are highest."
+            elif etype == "STUDY":
+                reason = f"Moved to {when} to put focused study in a peak-energy window."
+            elif etype == "ADMIN":
+                reason = f"Moved to {when} to keep low-effort admin in an energy dip."
+            else:
+                reason = f"Moved to {when} to better match your energy."
         else:
             reason = "Already in a well-matched energy window."
 
@@ -258,18 +263,26 @@ def _llm_restructure(
         for e in events
     )
     system = (
-        "You are EnergyScheduler, an assistant that rearranges a person's day so "
-        "demanding work lands in high-energy hours and low-effort tasks land in dips. "
-        "Rules: Only move DEEP_WORK and ADMIN blocks. PRESERVE the original times of "
-        "MEETING (they involve other people), BREAK, and PERSONAL events (they are "
-        "time-sensitive). Send DEEP_WORK to the highest-energy free window and ADMIN to "
-        "a low-energy window. Keep every event on the same date, between 06:00 and "
-        "23:00, with the same duration, and never overlap two events. Explain every "
-        "move in plain English."
+        "You are EnergyScheduler, an assistant that rearranges a student-athlete's day so "
+        "focused study and training land in high-energy / good-recovery hours and "
+        "low-effort tasks land in dips. Rules: Only move STUDY, STRENGTH, RUNNING and "
+        "ADMIN blocks. PRESERVE the original times of CLASS and CAMPUS_WORK — they are "
+        "fixed commitments. Send STUDY and workouts (STRENGTH, RUNNING) to the "
+        "highest-energy free windows and ADMIN to a low-energy window. Keep every event "
+        "on the same date, between 06:00 and 23:00, with the same duration, and never "
+        "overlap two events. Explain every move in plain English."
     )
+    blocked = [
+        f"{_fmt_time(e['start'])}-{_fmt_time(e['end'])}"
+        for e in events
+        if e["event_type"] in _FIXED_TYPES
+    ]
+    blocked_line = ", ".join(blocked) if blocked else "none"
     user = (
         f"Hourly energy (hour:score):\n{compact_profile}\n\n"
         f"Events:\n{event_lines}\n\n"
+        f"BLOCKED windows — fixed classes/on-campus work, never overlap or move these: "
+        f"{blocked_line}.\n\n"
         f"Analysis: {fit_analysis.get('summary', '')}. "
         f"Mismatched events: {fit_analysis.get('mismatches', [])}.\n\n"
         "Return ONLY JSON of the form:\n"
@@ -317,7 +330,14 @@ def _llm_restructure(
 
     if len(validated) != len(events):
         return None
+
+    # Reject the LLM's plan if it overlaps any two events — fall back to the
+    # overlap-safe rule-based scheduler instead of shipping a broken schedule.
     validated.sort(key=lambda e: e["start"])
+    for earlier, later in zip(validated, validated[1:]):
+        if datetime.fromisoformat(earlier["end"]) > datetime.fromisoformat(later["start"]):
+            return None
+
     return validated
 
 

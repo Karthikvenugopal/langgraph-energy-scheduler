@@ -12,8 +12,8 @@ pinned: false
 
 EnergyScheduler is an AI agent that turns your calendar into an **energy-aware plan**. It reads
 your schedule and your wearable signals — sleep, activity, recovery — then decides *what to do
-when*: deep work in your peak hours, low-effort tasks in your dips, with a plain-English reason
-for every move.
+when*: study and training in your peak and recovery hours, low-effort tasks in your dips, with a
+plain-English reason for every move.
 
 **▶️ Live demo:** https://karthikvenugopal-langgraph-energy-scheduler.hf.space/ui — loads instantly
 on a sample day + a live LLM (see [Live demo](#live-demo) for why it runs in demo mode).
@@ -27,7 +27,7 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 
 ## Features
 
-- 🔋 **Energy-aware scheduling** — deep work → peak energy, admin/breaks → dips.
+- 🔋 **Energy-aware scheduling** — study & training → peak/recovery hours, admin → dips.
 - ⌚ **Real Google Fit data** (steps, active minutes, sleep stages, resting HR) with a graceful
   synthetic fallback.
 - 🧠 **LangGraph agent** — a transparent 5-node pipeline you can watch run in stdout.
@@ -82,12 +82,13 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 
 1. **fetch_data** — pulls the day's calendar events, your latest Google Fit summary, and builds
    an hourly energy profile (06:00–23:00).
-2. **classify_events** — labels each event `DEEP_WORK` / `MEETING` / `ADMIN` / `BREAK` /
-   `PERSONAL` (Groq, with a keyword fallback).
+2. **classify_events** — labels each event `CLASS` / `CAMPUS_WORK` / `STUDY` / `STRENGTH` /
+   `RUNNING` / `ADMIN` (Groq, with a keyword fallback).
 3. **analyze_fit** — scores each event against the energy at its slot and flags mismatches
-   (e.g. deep work scheduled during a dip).
-4. **restructure** — proposes a new schedule: meetings stay put (they involve other people),
-   solo blocks move into better-matched energy windows, with a plain-English reason for each move.
+   (e.g. a hard workout or focused study scheduled during a dip).
+4. **restructure** — proposes a new schedule: classes and on-campus work stay put (fixed
+   commitments); study and workouts move into your best energy/recovery windows and low-effort
+   admin into your dips, with a plain-English reason for each move.
 5. **format_output** — emits clean JSON plus human-readable reasoning bullets.
 
 Every node logs a `[node] …` line to stdout so you can follow the reasoning chain.

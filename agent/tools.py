@@ -13,20 +13,30 @@ from typing import Any, Optional
 
 # Valid event categories. DEEP_WORK and important MEETINGs want high-energy slots;
 # ADMIN/BREAK/PERSONAL can live in low-energy windows.
-EVENT_TYPES = ["DEEP_WORK", "MEETING", "ADMIN", "BREAK", "PERSONAL"]
+# Event categories for a student-athlete's day. CLASS and CAMPUS_WORK are fixed
+# commitments; STUDY, STRENGTH, RUNNING and ADMIN are movable around energy.
+EVENT_TYPES = ["CLASS", "CAMPUS_WORK", "STUDY", "STRENGTH", "RUNNING", "ADMIN"]
+
+# Movable types that belong in high-energy / good-recovery windows (vs. ADMIN,
+# which belongs in the dips).
+HIGH_ENERGY_TYPES = {"STUDY", "STRENGTH", "RUNNING"}
 
 DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # Keyword fallbacks, checked in priority order (first match wins).
 _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
-    ("MEETING", ("standup", "stand-up", "sync", "meeting", "review", "1:1", "1-1",
-                 "call", "interview", "demo", "retro", "planning meeting", "catch up")),
-    ("BREAK", ("lunch", "break", "coffee", "gym", "workout", "walk", "rest")),
-    ("DEEP_WORK", ("deep work", "focus", "writing", "write", "coding", "code", "build",
-                   "research", "draft", "design", "architecture", "prototype")),
-    ("ADMIN", ("email", "admin", "expenses", "expense", "invoice", "triage", "inbox",
-               "paperwork", "planning", "timesheet", "errand")),
-    ("PERSONAL", ("personal", "doctor", "appointment", "family", "dentist", "school")),
+    ("CAMPUS_WORK", ("shift", "on-campus", "on campus", "research assistant", "teaching assistant",
+                     "office hours", "work study", "work-study", "campus job", "ra hours",
+                     "ta hours")),
+    ("CLASS", ("class", "lecture", "lab", "discussion", "section", "seminar", "recitation",
+               "exam", "midterm", "final", "quiz")),
+    ("STRENGTH", ("strength", "gym", "lift", "weights", "workout", "squat", "bench", "training")),
+    ("RUNNING", ("running", "jog", "jogging", "cardio", "easy run", "long run", "morning run",
+                 "evening run", "tempo", "track workout", "5k", "10k", "miles")),
+    ("STUDY", ("study", "homework", "assignment", "problem set", "pset", "readings", "reading",
+               "essay", "write-up", "deep work", "focus", "project work", "coding")),
+    ("ADMIN", ("email", "admin", "errand", "errands", "chores", "laundry", "groceries",
+               "inbox", "paperwork", "registration", "planning")),
 ]
 
 
@@ -76,10 +86,12 @@ def classify_event_type(title: str, description: str = "") -> str:
         prompt = (
             "Classify this calendar event into exactly one category: "
             f"{', '.join(EVENT_TYPES)}.\n"
-            "Guidance: DEEP_WORK = solo cognitively demanding focus work; "
-            "MEETING = involves other people; ADMIN = low-effort tasks like email/"
-            "expenses/triage; BREAK = lunch/rest/exercise; PERSONAL = personal "
-            "appointments.\n"
+            "Guidance: CLASS = lectures, labs, discussions, exams (fixed class time); "
+            "CAMPUS_WORK = on-campus job/shift, research or teaching assistant hours, "
+            "office hours; STUDY = solo focused academic work (homework, problem sets, "
+            "readings, projects); STRENGTH = strength training / gym / lifting; "
+            "RUNNING = runs, jogs, cardio; ADMIN = low-effort tasks like email, errands, "
+            "chores.\n"
             f"Title: {title}\nDescription: {description}\n"
             "Respond with ONLY the category word."
         )
@@ -137,10 +149,14 @@ def score_event_fit(
     fit_score = int(round(slot_energy))
 
     event_type = event.get("event_type")
-    mismatch = (
-        (event_type == "DEEP_WORK" and slot_energy < 60)
-        or (event_type == "MEETING" and slot_energy < 50)
-    )
+    if event_type == "STUDY":
+        mismatch = slot_energy < 60          # focused study stuck in a dip
+    elif event_type in ("STRENGTH", "RUNNING"):
+        mismatch = slot_energy < 55          # training when you're depleted
+    elif event_type == "ADMIN":
+        mismatch = slot_energy > 72          # low-effort admin wasting a peak
+    else:
+        mismatch = False                     # CLASS / CAMPUS_WORK are fixed
     return fit_score, mismatch
 
 
@@ -152,14 +168,12 @@ def _overlaps(start: datetime, end: datetime, booked: list[tuple[datetime, datet
 def _preference_score(event_type: str, slot_energy: float) -> float:
     """Rank a candidate slot's energy for a given event type (higher = better).
 
-    DEEP_WORK prefers the highest energy, ADMIN/BREAK/PERSONAL the lowest, and
-    MEETINGs a moderate band centered around 68.
+    STUDY, STRENGTH and RUNNING prefer the highest energy / best recovery; ADMIN
+    prefers the lowest, so peaks stay free for study and training.
     """
-    if event_type == "DEEP_WORK":
+    if event_type in HIGH_ENERGY_TYPES:
         return slot_energy
-    if event_type == "MEETING":
-        return 100 - abs(slot_energy - 68)
-    # ADMIN / BREAK / PERSONAL -> prefer low energy so peaks stay free for focus.
+    # ADMIN (and any other movable type) -> prefer low energy.
     return 100 - slot_energy
 
 
