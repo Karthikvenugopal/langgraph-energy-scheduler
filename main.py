@@ -24,8 +24,9 @@ from pydantic import BaseModel, Field  # noqa: E402
 from agent.graph import run_agent  # noqa: E402
 from services import calendar as calendar_service  # noqa: E402
 from services import energy as energy_service  # noqa: E402
-from services import fitness as fitness_service  # noqa: E402
 from services import google_auth  # noqa: E402
+from services import wearable as wearable_service  # noqa: E402
+from services import whoop_auth  # noqa: E402
 
 app = FastAPI(
     title="EnergyScheduler",
@@ -79,6 +80,8 @@ class FitSummaryResponse(BaseModel):
     activity: Optional[dict[str, Any]] = None
     sleep: Optional[dict[str, Any]] = None
     resting_heart_rate: Optional[float] = None
+    recovery: Optional[float] = None
+    hrv: Optional[float] = None
     data_source: str
 
 
@@ -99,8 +102,9 @@ class OptimizeResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    """Liveness probe; also reports whether Google is connected."""
-    return HealthResponse(status="ok", authenticated=google_auth.has_token())
+    """Liveness probe; also reports whether a wearable/calendar is connected."""
+    connected = google_auth.has_token() or whoop_auth.has_token()
+    return HealthResponse(status="ok", authenticated=connected)
 
 
 @app.post("/optimize", response_model=OptimizeResponse)
@@ -146,8 +150,8 @@ def optimize(
 @app.get("/energy-profile", response_model=EnergyProfileResponse)
 def energy_profile() -> EnergyProfileResponse:
     """Return today's hourly energy profile (for the frontend chart)."""
-    fitness_data = fitness_service.get_fitness_summary()
-    energy = energy_service.get_energy_profile(fitness_data)
+    fitness_data, source = wearable_service.get_wearable_summary()
+    energy = energy_service.get_energy_profile(fitness_data, source)
     return EnergyProfileResponse(
         profile=energy["profile"],
         readiness_score=energy["readiness_score"],
@@ -157,14 +161,16 @@ def energy_profile() -> EnergyProfileResponse:
 
 @app.get("/fit-summary", response_model=FitSummaryResponse)
 def fit_summary() -> FitSummaryResponse:
-    """Return raw Google Fit data for today (null fields if unavailable)."""
-    summary = fitness_service.get_fitness_summary()
-    has_data = any(summary.get(k) is not None for k in summary)
+    """Return raw wearable data for today (null fields if unavailable)."""
+    summary, source = wearable_service.get_wearable_summary()
+    summary = summary or {}
     return FitSummaryResponse(
         activity=summary.get("activity"),
         sleep=summary.get("sleep"),
         resting_heart_rate=summary.get("resting_heart_rate"),
-        data_source="google_fit" if has_data else "synthetic",
+        recovery=summary.get("recovery"),
+        hrv=summary.get("hrv"),
+        data_source=source,
     )
 
 
@@ -197,6 +203,42 @@ def auth_callback(request: Request) -> Any:
     except Exception as exc:  # noqa: BLE001 - surface a friendly message to the user
         return HTMLResponse(
             f"<h3>Authentication failed</h3><p>{exc}</p>"
+            "<p><a href='/ui'>Back to app</a></p>",
+            status_code=400,
+        )
+    return RedirectResponse("/ui")
+
+
+@app.get("/auth/whoop")
+def auth_whoop() -> Any:
+    """Kick off the Whoop OAuth consent flow."""
+    if not whoop_auth.has_credentials():
+        return HTMLResponse(
+            "<h3>Whoop not configured</h3><p>Set WHOOP_CLIENT_ID and "
+            "WHOOP_CLIENT_SECRET in your environment.</p>",
+            status_code=400,
+        )
+    import secrets
+
+    url = whoop_auth.build_authorize_url(state=secrets.token_urlsafe(16))
+    return RedirectResponse(url)
+
+
+@app.get("/auth/whoop/callback")
+def auth_whoop_callback(request: Request) -> Any:
+    """Handle the Whoop OAuth redirect, exchange the code, and persist the token."""
+    code = request.query_params.get("code")
+    if not code:
+        return HTMLResponse(
+            "<h3>Whoop authentication failed</h3><p>No authorization code returned.</p>"
+            "<p><a href='/ui'>Back to app</a></p>",
+            status_code=400,
+        )
+    try:
+        whoop_auth.exchange_code(code)
+    except Exception as exc:  # noqa: BLE001 - surface a friendly message to the user
+        return HTMLResponse(
+            f"<h3>Whoop authentication failed</h3><p>{exc}</p>"
             "<p><a href='/ui'>Back to app</a></p>",
             status_code=400,
         )

@@ -25,6 +25,7 @@ import requests
 
 from services import calendar as calendar_service
 from services import google_auth
+from services import whoop_auth
 
 # When set, the UI talks to the REST API; otherwise it runs the agent in-process.
 BACKEND_URL = os.getenv("BACKEND_URL")
@@ -75,9 +76,10 @@ def _get_energy() -> dict[str, Any]:
         return response.json()
 
     from services import energy as energy_service
-    from services import fitness as fitness_service
+    from services import wearable as wearable_service
 
-    return energy_service.get_energy_profile(fitness_service.get_fitness_summary())
+    summary, source = wearable_service.get_wearable_summary()
+    return energy_service.get_energy_profile(summary, source)
 
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +106,11 @@ def _energy_dataframe(profile: dict[Any, Any]) -> pd.DataFrame:
 
 def _badge_html(data_source: str) -> str:
     """Render the data-source badge."""
+    if data_source == "whoop":
+        return (
+            "<span style='background:#ede9fe;color:#5b21b6;padding:6px 12px;"
+            "border-radius:999px;font-weight:600;'>⌚ Powered by Whoop</span>"
+        )
     if data_source == "google_fit":
         return (
             "<span style='background:#dcfce7;color:#166534;padding:6px 12px;"
@@ -132,29 +139,49 @@ def _readiness_html(score: int) -> str:
     )
 
 
+def _connect_link(path: str, label: str, color: str) -> str:
+    """Render a styled connect button linking to an OAuth start route."""
+    url = f"{BACKEND_URL}{path}" if BACKEND_URL else path
+    return (
+        f"<a href='{url}' style='background:{color};color:white;padding:8px 16px;"
+        "border-radius:8px;text-decoration:none;font-weight:600;margin-right:8px;'>"
+        f"{label}</a>"
+    )
+
+
 def _connection_html() -> str:
-    """Render the Google connection status / connect link."""
+    """Render the connection status, or connect buttons for configured providers."""
+    if whoop_auth.has_token():
+        return (
+            "<div style='padding:8px 0;'>✅ Connected to <b>Whoop</b> "
+            "— planning around your recovery, sleep &amp; HRV.</div>"
+        )
     if google_auth.has_token():
         name = calendar_service.get_calendar_name() or "your Google Calendar"
         return (
             f"<div style='padding:8px 0;'>✅ Connected to <b>{name}</b> "
             "— using your real calendar and Google Fit data.</div>"
         )
-    if not google_auth.has_client_secrets():
-        # No OAuth client on disk (e.g. the hosted public demo). Show an intentional
-        # demo banner rather than a "Connect Google" button that can't complete.
+
+    # Not connected: offer whichever providers are configured.
+    buttons: list[str] = []
+    if google_auth.has_client_secrets():
+        buttons.append(_connect_link("/auth/google", "Connect Google", "#2563eb"))
+    if whoop_auth.has_credentials():
+        buttons.append(_connect_link("/auth/whoop", "Connect Whoop", "#6d28d9"))
+
+    if buttons:
         return (
-            "<div style='padding:8px 0;'>🔬 <b>Live demo</b> — running on a realistic sample "
-            "calendar with synthetic energy and a live LLM. Clone the repo and add your Google "
-            "credentials to plan your <i>own</i> calendar &amp; Fit data.</div>"
+            "<div style='padding:8px 0;'>" + "".join(buttons)
+            + "<span style='margin-left:6px;color:#6b7280;'>Using demo data — connect to "
+            "plan your <i>own</i> calendar with real recovery data.</span></div>"
         )
-    auth_url = f"{BACKEND_URL}/auth/google" if BACKEND_URL else "/auth/google"
+
+    # No OAuth client configured (e.g. the hosted public demo): intentional demo banner.
     return (
-        "<div style='padding:8px 0;'>"
-        f"<a href='{auth_url}' style='background:#2563eb;color:white;padding:8px 16px;"
-        "border-radius:8px;text-decoration:none;font-weight:600;'>Connect Google</a>"
-        "<span style='margin-left:10px;color:#6b7280;'>Using demo data — connect to use "
-        "your real calendar &amp; Fit data.</span></div>"
+        "<div style='padding:8px 0;'>🔬 <b>Live demo</b> — running on a realistic sample "
+        "calendar with synthetic energy and a live LLM. Clone the repo and add your Google "
+        "or Whoop credentials to plan your <i>own</i> day from real recovery data.</div>"
     )
 
 

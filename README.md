@@ -28,8 +28,8 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 ## Features
 
 - 🔋 **Energy-aware scheduling** — study & training → peak/recovery hours, admin → dips.
-- ⌚ **Real Google Fit data** (steps, active minutes, sleep stages, resting HR) with a graceful
-  synthetic fallback.
+- ⌚ **Real wearable data** — **Whoop** (recovery, sleep, HRV) or **Google Fit** (steps, sleep,
+  resting HR) — with a graceful synthetic fallback.
 - 🧠 **LangGraph agent** — a transparent 5-node pipeline you can watch run in stdout.
 - 🗓️ **Google Calendar** integration with a built-in demo schedule (no auth required).
 - 🖥️ **Gradio UI** — original vs. restructured schedule, color-coded energy chart, readiness
@@ -47,7 +47,7 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 | Backend     | FastAPI + Uvicorn                               |
 | Agent       | LangGraph                                        |
 | LLM         | Groq — `llama-3.3-70b-versatile` (via `langchain-groq`) |
-| Data        | Google Calendar API + Google Fit (Fitness) API  |
+| Data        | Google Calendar + **Whoop** (recovery/sleep/HRV) + Google Fit  |
 | Frontend    | Gradio                                           |
 | Deploy      | Docker → Hugging Face Spaces                     |
 
@@ -67,6 +67,9 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 │   ├── google_auth.py      # shared OAuth + get_google_service()
 │   ├── calendar.py         # Google Calendar client + demo events
 │   ├── fitness.py          # Google Fit client (activity / sleep / heart rate)
+│   ├── fitness_whoop.py    # Whoop client (recovery / sleep / HRV)
+│   ├── whoop_auth.py       # Whoop OAuth2
+│   ├── wearable.py         # source dispatcher (Whoop / Google Fit / synthetic)
 │   └── energy.py           # energy score engine (real + synthetic)
 ├── frontend/
 │   └── app.py              # Gradio UI
@@ -80,7 +83,7 @@ immediately with zero setup. Everything in the stack is **free to run and deploy
 
 ## How it works
 
-1. **fetch_data** — pulls the day's calendar events, your latest Google Fit summary, and builds
+1. **fetch_data** — pulls the day's calendar events, your latest wearable summary (Whoop or Google Fit), and builds
    an hourly energy profile (06:00–23:00).
 2. **classify_events** — labels each event `CLASS` / `CAMPUS_WORK` / `STUDY` / `STRENGTH` /
    `RUNNING` / `ADMIN` (Groq, with a keyword fallback).
@@ -212,6 +215,29 @@ heart-rate read).
 
 ---
 
+## Connect Whoop (recovery-based scheduling)
+
+Whoop is a first-class source — it provides a calibrated **recovery score**, **HRV**, and sleep
+stages that the energy engine uses directly (recovery drives the day's baseline, and readiness
+*is* your Whoop recovery %).
+
+1. **Create a Whoop app** at https://developer.whoop.com → *Developer Dashboard → Create app*.
+   - Scopes: `read:recovery`, `read:sleep`, `read:cycles`, `read:profile`, `offline`.
+   - **Redirect URI:** `http://localhost:8000/auth/whoop/callback`
+2. **Add the credentials** to `.env`:
+   ```
+   WHOOP_CLIENT_ID=...
+   WHOOP_CLIENT_SECRET=...
+   WEARABLE_SOURCE=whoop        # or leave as "auto"
+   ```
+3. **Authorize** — start the app, open the UI, click **Connect Whoop**, and approve. The token is
+   saved to `token_whoop.json` and auto-refreshed; the badge switches to **⌚ Powered by Whoop**.
+
+With `WEARABLE_SOURCE=auto` (the default), the app uses Whoop when connected, then Google Fit,
+then the synthetic curve.
+
+---
+
 ## Connecting a Google Fit device for real data
 
 To get **real** energy scores instead of the synthetic curve:
@@ -232,28 +258,28 @@ app automatically falls back to the synthetic curve. See the next section for al
 
 ---
 
-## Connecting real wearable data (Oura, Whoop, Apple Health)
+## Other wearables (Oura, Apple Health)
 
-The energy engine only needs a dict shaped like:
+**Whoop is built in** (see above). Adding another source is the same pattern — the energy engine
+only needs a normalized dict:
 
 ```python
 {
-    "activity": {"steps": int, "active_minutes": int, "calories_burned": float, "distance_meters": float},
+    "activity": {"steps": int | None, ...},
     "sleep": {"total_sleep_minutes": int, "deep_sleep_minutes": int, "light_sleep_minutes": int},
-    "resting_heart_rate": float,
+    "resting_heart_rate": float | None,
+    "recovery": float | None,   # 0–100, used directly as readiness when present
+    "hrv": float | None,
 }
 ```
 
-To swap in a different source, replace `services.fitness.get_fitness_summary()` with your own
-call and keep that shape — `services/energy.py` works unchanged.
+Write a client that returns that shape (use `services/fitness_whoop.py` as the reference) and add
+it to the dispatcher in `services/wearable.py` — `services/energy.py` works unchanged.
 
-- **Oura** — use the [Oura API v2](https://cloud.ouraring.com/v2/docs) with a personal access
-  token: map `daily_activity` → activity, `daily_sleep`/`sleep` → sleep, and `daily_readiness`'s
-  resting HR → `resting_heart_rate`.
-- **Whoop** — use the [Whoop API](https://developer.whoop.com/) recovery + sleep + workout
-  endpoints (OAuth2).
+- **Oura** — [Oura API v2](https://cloud.ouraring.com/v2/docs) with a personal access token: map
+  `daily_readiness` → `recovery`, `daily_sleep`/`sleep` → sleep, resting HR → `resting_heart_rate`.
 - **Apple Health** — export via the Health app or a companion app that exposes HealthKit data
-  (e.g. an iOS shortcut or a small bridge app), then feed the daily metrics into the same dict.
+  (e.g. an iOS shortcut or a small bridge), then feed the daily metrics into the same dict.
 
 ---
 
@@ -261,12 +287,14 @@ call and keep that shape — `services/energy.py` works unchanged.
 
 | Method | Path              | Description                                                   |
 |--------|-------------------|---------------------------------------------------------------|
-| GET    | `/health`         | Liveness + whether Google is connected.                       |
+| GET    | `/health`         | Liveness + whether a wearable/calendar is connected.          |
 | POST   | `/optimize?date=` | Run the full agent; returns original + restructured schedule. |
 | GET    | `/energy-profile` | Today's hourly energy profile and data source.                |
-| GET    | `/fit-summary`    | Raw Google Fit data for today (nulls if unavailable).         |
+| GET    | `/fit-summary`    | Raw wearable data today — Whoop/Google Fit (nulls if none).    |
 | GET    | `/auth/google`    | Start the Google OAuth flow.                                   |
-| GET    | `/auth/callback`  | OAuth redirect handler (saves `token.json`).                   |
+| GET    | `/auth/callback`  | Google OAuth redirect handler (saves `token.json`).           |
+| GET    | `/auth/whoop`     | Start the Whoop OAuth flow.                                    |
+| GET    | `/auth/whoop/callback` | Whoop OAuth redirect handler (saves `token_whoop.json`). |
 | GET    | `/ui`             | The Gradio UI.                                                 |
 
 ---
@@ -299,6 +327,10 @@ The app is a single Docker container that serves the API and the Gradio UI on po
 |----------------------|----------|-------------------------------|-------------------------------------------|
 | `GROQ_API_KEY`       | No*      | —                             | Groq LLM. Omitted → heuristic fallbacks.  |
 | `GROQ_MODEL`         | No       | `llama-3.3-70b-versatile`     | Override the Groq model.                   |
+| `WEARABLE_SOURCE`    | No       | `auto`                        | `auto` / `whoop` / `google_fit`.           |
+| `WHOOP_CLIENT_ID`    | No       | —                             | Whoop OAuth client id.                     |
+| `WHOOP_CLIENT_SECRET`| No       | —                             | Whoop OAuth client secret.                 |
+| `WHOOP_REDIRECT_URI` | No       | `…/auth/whoop/callback`       | Whoop OAuth callback URL.                  |
 | `BACKEND_URL`        | No       | (unset → in-process)          | Make the standalone UI use the REST API.  |
 | `OAUTH_REDIRECT_URI` | No       | `http://localhost:8000/auth/callback` | OAuth callback URL.               |
 

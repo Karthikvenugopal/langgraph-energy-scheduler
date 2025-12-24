@@ -25,7 +25,7 @@ from agent.tools import (
 )
 from services import calendar as calendar_service
 from services import energy as energy_service
-from services import fitness as fitness_service
+from services import wearable as wearable_service
 
 # Event types the agent never relocates: CLASS and CAMPUS_WORK are fixed
 # commitments tied to set times (and other people).
@@ -62,8 +62,8 @@ def fetch_data_node(state: EnergySchedulerState) -> dict[str, Any]:
     _log("fetch_data", f"loading events for {target_date or 'today'}")
 
     events = calendar_service.get_events_today(target_date)
-    fitness_data = fitness_service.get_fitness_summary()
-    energy = energy_service.get_energy_profile(fitness_data)
+    fitness_data, source = wearable_service.get_wearable_summary()
+    energy = energy_service.get_energy_profile(fitness_data, source)
 
     _log(
         "fetch_data",

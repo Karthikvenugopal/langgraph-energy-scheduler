@@ -2,6 +2,7 @@
 .env
 credentials.json
 token.json
+token_whoop.json
 
 # Python
 __pycache__/

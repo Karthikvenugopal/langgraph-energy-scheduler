@@ -59,24 +59,29 @@ def _has_real_data(fitness_data: Optional[dict[str, Any]]) -> bool:
         return False
     return any(
         fitness_data.get(key) is not None
-        for key in ("activity", "sleep", "resting_heart_rate")
+        for key in ("activity", "sleep", "resting_heart_rate", "recovery", "hrv")
     )
 
 
 def _compute_readiness(
+    recovery: Optional[float],
     sleep: Optional[dict[str, Any]],
     activity: Optional[dict[str, Any]],
     resting_hr: Optional[float],
 ) -> int:
-    """Derive an overall 0–100 readiness score from real Fit signals.
+    """Derive an overall 0–100 readiness score from real biometric signals.
 
-    Starts at a neutral 50 and adds/subtracts contributions from sleep duration,
-    daily activity, and recovery (resting HR). Each missing signal simply
-    contributes nothing.
+    If a Whoop recovery score is present it is used directly — it *is* a calibrated
+    readiness number. Otherwise readiness starts at a neutral 50 and adds/subtracts
+    contributions from sleep duration, daily activity, and resting HR; each missing
+    signal simply contributes nothing.
 
     Returns:
         The clamped readiness score.
     """
+    if recovery is not None:
+        return _clamp(recovery)
+
     score = 50.0
 
     if sleep is not None:
@@ -115,19 +120,29 @@ def _compute_readiness(
 def _profile_from_fitness(fitness_data: dict[str, Any]) -> dict[int, int]:
     """Apply sleep/activity/recovery modifiers to the base curve.
 
-    Modifiers (per spec):
+    Modifiers:
+      * Whoop recovery ≥ 67 (green) → +6 to every hour; < 34 (red) → −12 to every hour
       * sleep < 360 min → −15 to every hour; > 480 min → +10 to every hour
       * steps > 8000 → +8 to afternoon hours; < 2000 → −8 to afternoon hours
+        (skipped when steps is unavailable, e.g. Whoop, which is strain-based)
       * resting HR > 75 → −10 to morning hours
 
     Returns:
         The modified, clamped hourly profile.
     """
+    recovery = fitness_data.get("recovery")
     sleep = fitness_data.get("sleep")
     activity = fitness_data.get("activity")
     resting_hr = fitness_data.get("resting_heart_rate")
 
     profile = dict(BASE_CURVE)
+
+    # Recovery modifier (Whoop) — applies to the whole day.
+    if recovery is not None:
+        if recovery >= 67:
+            profile = {hour: score + 6 for hour, score in profile.items()}
+        elif recovery < 34:
+            profile = {hour: score - 12 for hour, score in profile.items()}
 
     # Sleep modifier (applies to the whole day).
     if sleep is not None:
@@ -137,9 +152,9 @@ def _profile_from_fitness(fitness_data: dict[str, Any]) -> dict[int, int]:
         elif total > 480:
             profile = {hour: score + 10 for hour, score in profile.items()}
 
-    # Activity modifier (afternoon only).
-    if activity is not None:
-        steps = activity.get("steps") or 0
+    # Activity modifier (afternoon only). Skipped when steps aren't reported.
+    if activity is not None and activity.get("steps") is not None:
+        steps = activity["steps"]
         if steps > 8000:
             for hour in AFTERNOON_HOURS:
                 profile[hour] += 8
@@ -147,7 +162,7 @@ def _profile_from_fitness(fitness_data: dict[str, Any]) -> dict[int, int]:
             for hour in AFTERNOON_HOURS:
                 profile[hour] -= 8
 
-    # Recovery modifier (morning only).
+    # Resting-HR modifier (morning only).
     if resting_hr is not None and resting_hr > 75:
         for hour in MORNING_HOURS:
             profile[hour] -= 10
@@ -160,29 +175,34 @@ def _synthetic_profile() -> dict[int, int]:
     return {hour: _clamp(score + random.uniform(-5, 5)) for hour, score in BASE_CURVE.items()}
 
 
-def get_energy_profile(fitness_data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def get_energy_profile(
+    fitness_data: Optional[dict[str, Any]] = None, source: Optional[str] = None
+) -> dict[str, Any]:
     """Build the hourly energy profile, readiness score, and data source.
 
     Args:
-        fitness_data: Optional combined Fit summary
-            ``{activity, sleep, resting_heart_rate}`` (each field may be ``None``).
-            When ``None`` or all-``None``, the synthetic curve is used.
+        fitness_data: Optional combined wearable summary
+            ``{activity, sleep, resting_heart_rate, recovery, hrv}`` (each field may
+            be ``None``). When ``None`` or all-``None``, the synthetic curve is used.
+        source: Label for the data's origin (``"whoop"`` / ``"google_fit"``); used as
+            ``data_source`` when real data is present.
 
     Returns:
         A dict with:
           * ``profile``: ``{hour (6–23) -> score 0–100}``
           * ``readiness_score``: overall 0–100 day score
-          * ``data_source``: ``"google_fit"`` or ``"synthetic"``
+          * ``data_source``: the ``source`` label, or ``"synthetic"``
     """
     if _has_real_data(fitness_data):
         assert fitness_data is not None  # for type-checkers; guarded by _has_real_data
         profile = _profile_from_fitness(fitness_data)
         readiness = _compute_readiness(
+            fitness_data.get("recovery"),
             fitness_data.get("sleep"),
             fitness_data.get("activity"),
             fitness_data.get("resting_heart_rate"),
         )
-        data_source = "google_fit"
+        data_source = source or "wearable"
     else:
         profile = _synthetic_profile()
         readiness = _clamp(statistics.mean(profile.values()) + random.uniform(-4, 4))
